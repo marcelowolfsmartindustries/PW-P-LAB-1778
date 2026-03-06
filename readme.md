@@ -6,6 +6,8 @@
 ![Vercel](https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)
 ![npm](https://img.shields.io/badge/npm-CB3837?style=for-the-badge&logo=npm&logoColor=white)
 ![dotenv](https://img.shields.io/badge/.ENV-ECD53F?style=for-the-badge&logo=dotenv&logoColor=black)
+![Prisma](https://img.shields.io/badge/Prisma-2D3748?style=for-the-badge&logo=prisma&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 
 # 🚀 Tutorial — Setup de uma API em Node.js
 
@@ -43,8 +45,9 @@ Email: fernandesmarcelo@estg.ipvc.pt
 15. [Deploy no Vercel](#️-deploy-no-vercel)
 16. [LAB-1 — API Gestão de Filmes](#-lab-1--api-gestão-de-filmes-)
 17. [LAB-2 — API Gestão de Tarefas](#-lab-2--api-gestão-de-tarefas-)
-18. [Glossário](#-glossário)
-19. [Recursos Úteis](#-recursos-úteis)
+18. [LAB-3 — API com Prisma e PostgreSQL](#-lab-3--api-com-prisma-e-postgresql-)
+19. [Glossário](#-glossário)
+20. [Recursos Úteis](#-recursos-úteis)
 
 ---
 
@@ -590,6 +593,329 @@ Requisitos:
 
 ---
 
+# 🧪 LAB-3 — API com Prisma e PostgreSQL 🗄️
+
+Neste laboratório vais migrar a API de tarefas do LAB-2 para usar uma base de dados PostgreSQL real através do **Prisma ORM**.
+
+---
+
+## 📦 Instalação das dependências
+
+```bash
+npm install prisma @prisma/client --save
+```
+
+---
+
+## ⚙️ Inicializar o Prisma
+
+```bash
+npx prisma init --datasource-provider postgresql
+```
+
+Este comando cria:
+- `prisma/schema.prisma` — definição do schema da base de dados
+- `prisma.config.ts` — configuração do Prisma (URL da base de dados)
+- `.env` — ficheiro de variáveis de ambiente (já existente)
+
+---
+
+## 🌱 Configurar o `.env`
+
+Adicionar a variável `DATABASE_URL` ao ficheiro `.env`:
+
+```
+SERVER_PORT=4242
+DATABASE_URL="postgresql://UTILIZADOR:PASSWORD@localhost:5432/lab3db?schema=public"
+```
+
+> ⚠️ **Importante:** Substituir `UTILIZADOR`, `PASSWORD` e `lab3db` pelos valores da tua instalação PostgreSQL.
+
+---
+
+## 🗂️ Estrutura do Projeto (LAB-3)
+
+```
+PW-P-LAB-{{numero-de-aluno}}/
+├── generated/
+│   └── prisma/           # Cliente Prisma gerado (NÃO enviar para GitHub)
+├── prisma/
+│   ├── schema.prisma     # Modelo da base de dados
+│   └── migrations/       # Histórico de migrações
+├── prisma.config.ts      # Configuração do Prisma
+├── .env                  # Variáveis de ambiente (NÃO enviar para GitHub)
+├── .env.example          # Exemplo de variáveis de ambiente
+├── server.js             # Ficheiro principal da API
+└── ...
+```
+
+> 💡 Adicionar `generated/` ao `.gitignore` para não enviar o cliente gerado para o GitHub.
+
+---
+
+## 📐 Definir o modelo no `prisma/schema.prisma`
+
+```prisma
+model Task {
+  id        Int      @id @default(autoincrement())
+  title     String
+  completed Boolean  @default(false)
+  priority  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+```
+
+---
+
+## 🔄 Criar a migração e gerar o cliente
+
+```bash
+npx prisma migrate dev --name init
+```
+
+Este comando:
+1. Cria as tabelas na base de dados
+2. Gera o cliente Prisma em `generated/prisma`
+
+> 💡 Sempre que alteres o `schema.prisma`, deves correr `npx prisma migrate dev` para aplicar as alterações.
+
+---
+
+## 💻 `server.js` — API de Tarefas com Prisma
+
+```js
+require("dotenv").config();
+
+const express = require("express");
+const cors = require("cors");
+const morgan = require("morgan");
+const { PrismaClient } = require("./generated/prisma");
+
+const app = express();
+const prisma = new PrismaClient();
+
+app.use(cors());
+app.use(express.json());
+app.use(morgan("dev"));
+
+const PORT = process.env.SERVER_PORT || 3000;
+```
+
+### GET /tasks — Listar todas as tarefas
+
+```js
+app.get("/tasks", async (req, res) => {
+  try {
+    const { completed } = req.query;
+
+    const where = completed !== undefined
+      ? { completed: completed === "true" }
+      : {};
+
+    const tasks = await prisma.task.findMany({ where });
+    res.status(200).json({ data: tasks });
+  } catch (error) {
+    res.status(500).json({ message: "Erro interno do servidor" });
+  }
+});
+```
+
+### GET /tasks/:id — Obter uma tarefa
+
+```js
+app.get("/tasks/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const task = await prisma.task.findUnique({ where: { id } });
+
+    if (!task) {
+      return res.status(404).json({ message: "Tarefa não encontrada" });
+    }
+
+    res.status(200).json({ data: task });
+  } catch (error) {
+    res.status(500).json({ message: "Erro interno do servidor" });
+  }
+});
+```
+
+### GET /tasks/stats — Estatísticas das tarefas
+
+```js
+app.get("/tasks/stats", async (req, res) => {
+  try {
+    const total = await prisma.task.count();
+    const completed = await prisma.task.count({ where: { completed: true } });
+    const pending = total - completed;
+
+    res.status(200).json({ data: { total, completed, pending } });
+  } catch (error) {
+    res.status(500).json({ message: "Erro interno do servidor" });
+  }
+});
+```
+
+### POST /tasks — Criar tarefa
+
+```js
+app.post("/tasks", async (req, res) => {
+  try {
+    const { title, priority } = req.body;
+
+    if (!title || !priority) {
+      return res.status(400).json({ message: "Campos 'title' e 'priority' são obrigatórios" });
+    }
+
+    const validPriorities = ["low", "medium", "high"];
+    if (!validPriorities.includes(priority)) {
+      return res.status(400).json({ message: "O campo 'priority' deve ser 'low', 'medium' ou 'high'" });
+    }
+
+    const task = await prisma.task.create({
+      data: { title, priority }
+    });
+
+    res.status(201).json({ data: task });
+  } catch (error) {
+    res.status(500).json({ message: "Erro interno do servidor" });
+  }
+});
+```
+
+### PUT /tasks/:id — Atualizar tarefa
+
+```js
+app.put("/tasks/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { title, priority, completed } = req.body;
+
+    if (!title || !priority) {
+      return res.status(400).json({ message: "Campos 'title' e 'priority' são obrigatórios" });
+    }
+
+    const validPriorities = ["low", "medium", "high"];
+    if (!validPriorities.includes(priority)) {
+      return res.status(400).json({ message: "O campo 'priority' deve ser 'low', 'medium' ou 'high'" });
+    }
+
+    const existing = await prisma.task.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ message: "Tarefa não encontrada" });
+    }
+
+    const task = await prisma.task.update({
+      where: { id },
+      data: { title, priority, completed: completed ?? existing.completed }
+    });
+
+    res.status(200).json({ data: task });
+  } catch (error) {
+    res.status(500).json({ message: "Erro interno do servidor" });
+  }
+});
+```
+
+### PATCH /tasks/:id/toggle — Alternar estado completed
+
+```js
+app.patch("/tasks/:id/toggle", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.task.findUnique({ where: { id } });
+
+    if (!existing) {
+      return res.status(404).json({ message: "Tarefa não encontrada" });
+    }
+
+    const task = await prisma.task.update({
+      where: { id },
+      data: { completed: !existing.completed }
+    });
+
+    res.status(200).json({ data: task });
+  } catch (error) {
+    res.status(500).json({ message: "Erro interno do servidor" });
+  }
+});
+```
+
+### DELETE /tasks/:id — Apagar tarefa
+
+```js
+app.delete("/tasks/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.task.findUnique({ where: { id } });
+
+    if (!existing) {
+      return res.status(404).json({ message: "Tarefa não encontrada" });
+    }
+
+    await prisma.task.delete({ where: { id } });
+    res.status(200).json({ message: "Tarefa eliminada com sucesso" });
+  } catch (error) {
+    res.status(500).json({ message: "Erro interno do servidor" });
+  }
+});
+```
+
+### Middleware de erros e iniciar o servidor
+
+```js
+// Rota não encontrada (404)
+app.use((req, res) => {
+  res.status(404).json({ message: "Rota não encontrada" });
+});
+
+// Middleware de erro global
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: "Erro interno do servidor" });
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ Servidor a correr em http://localhost:${PORT}`);
+});
+```
+
+---
+
+## 🔧 Comandos Prisma Úteis
+
+| Comando | Descrição |
+|---------|-----------|
+| `npx prisma migrate dev --name <nome>` | Cria e aplica uma nova migração |
+| `npx prisma migrate deploy` | Aplica migrações em produção |
+| `npx prisma studio` | Interface gráfica para explorar a base de dados |
+| `npx prisma db push` | Sincroniza o schema sem criar migração (protótipo) |
+| `npx prisma generate` | Regenera o cliente Prisma |
+
+---
+
+## 📋 Requisitos do LAB-3
+
+- Usar PostgreSQL como base de dados
+- Configurar o Prisma com o modelo `Task`
+- Implementar todos os endpoints do LAB-2 com Prisma:
+  - `GET /tasks` — Listar todas (com filtro `?completed=true/false`)
+  - `GET /tasks/stats` — Estatísticas (total, completas, pendentes)
+  - `GET /tasks/:id` — Obter uma tarefa
+  - `POST /tasks` — Criar tarefa
+  - `PUT /tasks/:id` — Atualizar tarefa
+  - `PATCH /tasks/:id/toggle` — Alternar estado `completed`
+  - `DELETE /tasks/:id` — Apagar tarefa
+- Validar campos obrigatórios (`title`, `priority`)
+- Validar que `priority` seja `"low"`, `"medium"` ou `"high"`
+- Status codes corretos (200, 201, 400, 404, 500)
+- Usar `try/catch` em todos os endpoints para tratamento de erros
+- Testar todos os endpoints no Postman
+
+> 💡 **Dica:** Usa o `npx prisma studio` para ver e editar os dados diretamente na base de dados através de uma interface gráfica.
+
+---
+
 # 🎯 Fim
 
 
@@ -739,6 +1065,12 @@ Isto permite flexibilidade entre desenvolvimento e produção.
 | **Nodemon** | Ferramenta que reinicia automaticamente o servidor ao detetar alterações nos ficheiros |
 | **CORS** | Cross-Origin Resource Sharing — permite pedidos de origens diferentes |
 | **dotenv** | Biblioteca para carregar variáveis de ambiente a partir do ficheiro `.env` |
+| **ORM** | Object-Relational Mapper — camada de abstração entre código e base de dados |
+| **Prisma** | ORM moderno para Node.js que simplifica o acesso a bases de dados relacionais |
+| **PostgreSQL** | Sistema de gestão de base de dados relacional open-source e robusto |
+| **Schema** | Definição da estrutura da base de dados (tabelas, campos, tipos) |
+| **Migração** | Script que aplica alterações ao schema da base de dados de forma controlada |
+| **PrismaClient** | Classe gerada pelo Prisma para interagir com a base de dados de forma tipada |
 
 ---
 
@@ -756,5 +1088,8 @@ Isto permite flexibilidade entre desenvolvimento e produção.
 | Shields.io (badges) | https://shields.io/ |
 | GitHub Student Pack | https://education.github.com/pack |
 | MDN Web Docs | https://developer.mozilla.org/pt-BR/ |
+| Prisma Docs | https://www.prisma.io/docs |
+| Prisma Schema Reference | https://www.prisma.io/docs/orm/reference/prisma-schema-reference |
+| PostgreSQL Download | https://www.postgresql.org/download/ |
 
 ---
